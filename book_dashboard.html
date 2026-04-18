@@ -570,11 +570,18 @@ function buildRadar() {
   radarAnim = requestAnimationFrame(draw);
 }
 
-/* ---- COVER QUEUE (rate-limited, 5 concurrent) ---- */
-var coverCache = {};
+/* ---- COVER LOADING (direct img fallback chain, no pre-testing) ---- */
+/*
+  Priority per book:
+  1. ISBN -> Open Library direct URL (one request, instant if it exists)
+  2. Title+author search on Open Library (for books without ISBN or with no ISBN cover)
+  3. Local uploaded image in /Covers/ (final fallback)
+  Loading directly into <img> with onerror/onload chain avoids double requests.
+*/
+
 var coverQueue = [];
 var coverInFlight = 0;
-var coverMaxConcurrent = 5;
+var coverMaxConcurrent = 8;
 var coverDoneCount = 0;
 var coverTotalQueued = 0;
 
@@ -583,20 +590,21 @@ function processCoverQueue() {
     var item = coverQueue.shift();
     coverInFlight++;
     (function(it) {
-      fetchCoverUrl(it.title, it.author, it.localCover, it.isbn13, function(url) {
+      loadCoverIntoImg(it, function() {
         coverInFlight--;
         coverDoneCount++;
         updateLoadingBar();
-        if (url && it.img && it.img.parentElement) {
-          var ph = it.ph;
-          it.img.onload = function() { it.img.classList.add('loaded'); if(ph) ph.style.opacity='0'; };
-          it.img.onerror = function() {};
-          it.img.src = url;
-        }
         processCoverQueue();
       });
     })(item);
   }
+}
+
+function showImg(img, ph, url) {
+  if (!img || !img.parentElement) return;
+  img.onload = function() { img.classList.add('loaded'); if(ph) ph.style.opacity='0'; };
+  img.onerror = function() {};
+  img.src = url;
 }
 
 /* Check if significant words from our title appear in returned title */
@@ -618,70 +626,62 @@ function olSearch(url) {
     .catch(function(){ return null; });
 }
 
-/* Test if an image URL actually loads (for ISBN covers) */
-function testImage(url) {
-  return new Promise(function(resolve) {
-    var img = new Image();
-    img.onload = function() {
-      // Open Library returns 1x1 placeholder for missing covers
-      resolve(img.naturalWidth > 10 ? url : null);
-    };
-    img.onerror = function() { resolve(null); };
-    img.src = url;
-  });
-}
-
-/* 3-tier cover fetch: 1) ISBN direct URL, 2) title/author search, 3) local uploaded image */
-function fetchCoverUrl(title, author, localCover, isbn13, cb) {
-  var key = title + '|' + author;
-  if (key in coverCache) { cb(coverCache[key]); return; }
-
-  var localUrl = localCover ? '/Covers/' + localCover.replace(/ /g,'%20') : null;
-
-  // Tier 1: ISBN-based Open Library URL (direct, fast, reliable)
-  if (isbn13) {
-    var isbnUrl = 'https://covers.openlibrary.org/b/isbn/' + isbn13 + '-M.jpg';
-    testImage(isbnUrl).then(function(url) {
-      if (url) {
-        coverCache[key] = url;
-        cb(url);
-        return;
-      }
-      // Tier 2: title+author search
-      fetchBySearch(title, author, key, localUrl, cb);
-    });
-    return;
-  }
-
-  // No ISBN: go straight to title search, then local fallback
-  fetchBySearch(title, author, key, localUrl, cb);
-}
-
-function fetchBySearch(title, author, cacheKey, localUrl, cb) {
+function searchThenLocal(title, author, localUrl, img, ph, done) {
   var enc = encodeURIComponent;
-  var url1 = 'https://openlibrary.org/search.json?title=' + enc(title) + '&author=' + enc(author) + '&fields=cover_i,title&limit=5';
-  olSearch(url1).then(function(d) {
+  olSearch('https://openlibrary.org/search.json?title=' + enc(title) + '&author=' + enc(author) + '&fields=cover_i,title&limit=5')
+  .then(function(d) {
     var docs = (d && d.docs) || [];
     for (var i=0; i<docs.length; i++) {
       if (docs[i].cover_i && titleMatches(title, docs[i].title)) return docs[i].cover_i;
     }
-    var url2 = 'https://openlibrary.org/search.json?title=' + enc(title) + '&fields=cover_i,title&limit=5';
-    return olSearch(url2).then(function(d2) {
+    return olSearch('https://openlibrary.org/search.json?title=' + enc(title) + '&fields=cover_i,title&limit=5')
+    .then(function(d2) {
       var docs2 = (d2 && d2.docs) || [];
       for (var i=0; i<docs2.length; i++) {
         if (docs2[i].cover_i && titleMatches(title, docs2[i].title)) return docs2[i].cover_i;
       }
       return null;
     });
-  }).then(function(id) {
-    var imgUrl = id ? 'https://covers.openlibrary.org/b/id/' + id + '-M.jpg' : localUrl;
-    coverCache[cacheKey] = imgUrl;
-    cb(imgUrl);
-  }).catch(function(){
-    // On error, fall back to local cover if available
-    coverCache[cacheKey] = localUrl;
-    cb(localUrl);
+  })
+  .then(function(id) {
+    var url = id ? 'https://covers.openlibrary.org/b/id/' + id + '-M.jpg' : localUrl;
+    if (url) showImg(img, ph, url);
+    done();
+  })
+  .catch(function() {
+    if (localUrl) showImg(img, ph, localUrl);
+    done();
   });
+}
+
+function loadCoverIntoImg(it, done) {
+  var img = it.img, ph = it.ph;
+  if (!img || !img.parentElement) { done(); return; }
+
+  var localUrl = it.localCover ? '/Covers/' + it.localCover.replace(/ /g,'%20') : null;
+
+  if (it.isbn13) {
+    var isbnUrl = 'https://covers.openlibrary.org/b/isbn/' + it.isbn13 + '-M.jpg';
+    img.onload = function() {
+      if (img.naturalWidth > 10) {
+        // Real cover found via ISBN
+        img.classList.add('loaded');
+        if (ph) ph.style.opacity = '0';
+        done();
+      } else {
+        // Open Library returned 1x1 placeholder - no cover for this ISBN
+        img.onload = null; img.onerror = null;
+        searchThenLocal(it.title, it.author, localUrl, img, ph, done);
+      }
+    };
+    img.onerror = function() {
+      img.onload = null; img.onerror = null;
+      searchThenLocal(it.title, it.author, localUrl, img, ph, done);
+    };
+    img.src = isbnUrl;
+  } else {
+    searchThenLocal(it.title, it.author, localUrl, img, ph, done);
+  }
 }
 
 function updateLoadingBar() {
@@ -724,14 +724,15 @@ function queueAllCovers() {
 
 /* ---- MODAL COVER ---- */
 function loadModalCover(title, author, localCover, isbn13) {
-  fetchCoverUrl(title, author, localCover||null, isbn13||null, function(url) {
-    if (!url) return;
-    var img = document.getElementById('mcImg');
-    var ph = document.getElementById('mcPh');
-    if (!img) return;
-    img.onload = function() { img.classList.add('loaded'); if(ph) ph.style.opacity='0'; };
-    img.src = url;
-  });
+  var img = document.getElementById('mcImg');
+  var ph  = document.getElementById('mcPh');
+  if (!img) return;
+  loadCoverIntoImg({
+    title: title, author: author,
+    localCover: localCover || null,
+    isbn13: isbn13 || null,
+    img: img, ph: ph
+  }, function(){});
 }
 
 /* ---- FILTERS & RENDERING ---- */
