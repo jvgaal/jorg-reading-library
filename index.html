@@ -824,11 +824,9 @@ function exportBooks() {
   var csv = rows.map(function(r){
     return r.map(function(v){
       var s = String(v).replace(/"/g,'""');
-      return /[,"
-]/.test(s) ? '"'+s+'"' : s;
+      return /[,"\n\r]/.test(s) ? '"'+s+'"' : s;
     }).join(',');
-  }).join('
-');
+  }).join('\r\n');
   var blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8;'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
