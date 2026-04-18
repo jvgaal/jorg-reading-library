@@ -570,18 +570,16 @@ function buildRadar() {
   radarAnim = requestAnimationFrame(draw);
 }
 
-/* ---- COVER LOADING (direct img fallback chain, no pre-testing) ---- */
-/*
+/* ---- COVER LOADING ----
   Priority per book:
-  1. ISBN -> Open Library direct URL (one request, instant if it exists)
-  2. Title+author search on Open Library (for books without ISBN or with no ISBN cover)
-  3. Local uploaded image in /Covers/ (final fallback)
-  Loading directly into <img> with onerror/onload chain avoids double requests.
+  1. Google Books API by ISBN  - returns clean JSON, great coverage, no image-testing needed
+  2. Open Library title search - verified title match
+  3. Local uploaded /Covers/   - guaranteed fallback for uploaded images
 */
 
 var coverQueue = [];
 var coverInFlight = 0;
-var coverMaxConcurrent = 8;
+var coverMaxConcurrent = 6;
 var coverDoneCount = 0;
 var coverTotalQueued = 0;
 
@@ -607,6 +605,14 @@ function showImg(img, ph, url) {
   img.src = url;
 }
 
+function apiFetch(url) {
+  var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var tid = ctrl ? setTimeout(function(){ ctrl.abort(); }, 9000) : null;
+  return fetch(url, ctrl ? {signal:ctrl.signal} : {})
+    .then(function(r){ if(tid) clearTimeout(tid); return r.json(); })
+    .catch(function(){ return null; });
+}
+
 /* Check if significant words from our title appear in returned title */
 function titleMatches(ourTitle, returnedTitle) {
   if (!returnedTitle) return false;
@@ -617,24 +623,33 @@ function titleMatches(ourTitle, returnedTitle) {
   return hits / words.length >= 0.55;
 }
 
-function olSearch(url) {
-  var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  var tid = ctrl ? setTimeout(function(){ ctrl.abort(); }, 8000) : null;
-  var opts = ctrl ? {signal: ctrl.signal} : {};
-  return fetch(url, opts)
-    .then(function(r){ if(tid) clearTimeout(tid); return r.json(); })
-    .catch(function(){ return null; });
+/* Google Books: ISBN lookup → returns HTTPS cover URL or null */
+function googleBooksCover(isbn13) {
+  var url = 'https://www.googleapis.com/books/v1/volumes?q=isbn:' + isbn13
+    + '&fields=items(volumeInfo/imageLinks)&maxResults=1';
+  return apiFetch(url).then(function(d) {
+    var links = d && d.items && d.items[0] && d.items[0].volumeInfo && d.items[0].volumeInfo.imageLinks;
+    if (!links) return null;
+    var raw = links.thumbnail || links.smallThumbnail || '';
+    if (!raw) return null;
+    /* Upgrade to larger cover: zoom=0 = full cover, remove curl effect */
+    return raw.replace('http://', 'https://').replace('zoom=1','zoom=0').replace('&edge=curl','');
+  }).catch(function(){ return null; });
 }
 
-function searchThenLocal(title, author, localUrl, img, ph, done) {
+/* Open Library title+author search → returns cover URL or null */
+function olSearch(title, author) {
   var enc = encodeURIComponent;
-  olSearch('https://openlibrary.org/search.json?title=' + enc(title) + '&author=' + enc(author) + '&fields=cover_i,title&limit=5')
+  return apiFetch('https://openlibrary.org/search.json?title=' + enc(title)
+    + '&author=' + enc(author) + '&fields=cover_i,title&limit=5')
   .then(function(d) {
     var docs = (d && d.docs) || [];
     for (var i=0; i<docs.length; i++) {
       if (docs[i].cover_i && titleMatches(title, docs[i].title)) return docs[i].cover_i;
     }
-    return olSearch('https://openlibrary.org/search.json?title=' + enc(title) + '&fields=cover_i,title&limit=5')
+    /* Title-only fallback */
+    return apiFetch('https://openlibrary.org/search.json?title=' + enc(title)
+      + '&fields=cover_i,title&limit=5')
     .then(function(d2) {
       var docs2 = (d2 && d2.docs) || [];
       for (var i=0; i<docs2.length; i++) {
@@ -642,45 +657,35 @@ function searchThenLocal(title, author, localUrl, img, ph, done) {
       }
       return null;
     });
-  })
-  .then(function(id) {
-    var url = id ? 'https://covers.openlibrary.org/b/id/' + id + '-M.jpg' : localUrl;
-    if (url) showImg(img, ph, url);
-    done();
-  })
-  .catch(function() {
-    if (localUrl) showImg(img, ph, localUrl);
-    done();
-  });
+  }).then(function(id) {
+    return id ? 'https://covers.openlibrary.org/b/id/' + id + '-M.jpg' : null;
+  }).catch(function(){ return null; });
 }
 
 function loadCoverIntoImg(it, done) {
   var img = it.img, ph = it.ph;
   if (!img || !img.parentElement) { done(); return; }
-
   var localUrl = it.localCover ? '/Covers/' + it.localCover.replace(/ /g,'%20') : null;
 
+  function useUrl(url) {
+    if (url) { showImg(img, ph, url); done(); }
+    else { if (localUrl) showImg(img, ph, localUrl); done(); }
+  }
+
   if (it.isbn13) {
-    var isbnUrl = 'https://covers.openlibrary.org/b/isbn/' + it.isbn13 + '-M.jpg';
-    img.onload = function() {
-      if (img.naturalWidth > 10) {
-        // Real cover found via ISBN
-        img.classList.add('loaded');
-        if (ph) ph.style.opacity = '0';
-        done();
-      } else {
-        // Open Library returned 1x1 placeholder - no cover for this ISBN
-        img.onload = null; img.onerror = null;
-        searchThenLocal(it.title, it.author, localUrl, img, ph, done);
-      }
-    };
-    img.onerror = function() {
-      img.onload = null; img.onerror = null;
-      searchThenLocal(it.title, it.author, localUrl, img, ph, done);
-    };
-    img.src = isbnUrl;
+    /* Step 1: Google Books (best coverage, clean JSON, no placeholder confusion) */
+    googleBooksCover(it.isbn13).then(function(url) {
+      if (url) { useUrl(url); return; }
+      /* Step 2: Open Library search */
+      olSearch(it.title, it.author).then(function(url2) {
+        useUrl(url2);
+      });
+    });
   } else {
-    searchThenLocal(it.title, it.author, localUrl, img, ph, done);
+    /* No ISBN: go straight to OL search then local */
+    olSearch(it.title, it.author).then(function(url) {
+      useUrl(url);
+    });
   }
 }
 
@@ -727,12 +732,8 @@ function loadModalCover(title, author, localCover, isbn13) {
   var img = document.getElementById('mcImg');
   var ph  = document.getElementById('mcPh');
   if (!img) return;
-  loadCoverIntoImg({
-    title: title, author: author,
-    localCover: localCover || null,
-    isbn13: isbn13 || null,
-    img: img, ph: ph
-  }, function(){});
+  loadCoverIntoImg({ title:title, author:author,
+    localCover:localCover||null, isbn13:isbn13||null, img:img, ph:ph }, function(){});
 }
 
 /* ---- FILTERS & RENDERING ---- */
