@@ -47,7 +47,7 @@ main{max-width:1360px;margin:0 auto;padding:32px 36px 64px;}
 .chart-toggle{display:flex;gap:6px;margin-bottom:10px;}
 .chart-toggle button{background:var(--bg2);border:1px solid var(--border);color:var(--text2);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:.76rem;transition:all .18s;font-family:inherit;}
 .chart-toggle button.on{background:var(--accent);border-color:var(--accent);color:#fff;}
-.chart-wrap{position:relative;height:220px;}
+.chart-wrap{position:relative;height:240px;}
 .chart-wrap canvas{width:100%!important;height:100%!important;}
 
 /* Radar */
@@ -130,6 +130,37 @@ select{padding:8px 12px;border:1px solid var(--border2);border-radius:8px;backgr
 .cover-loading-bar-fill{height:100%;background:var(--accent);width:0%;transition:width .3s ease;}
 
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--nav);color:#fff;padding:10px 20px;border-radius:8px;font-size:.82rem;opacity:0;pointer-events:none;transition:opacity .3s;z-index:9999;}
+
+/* ---- MOBILE ---- */
+@media(max-width:700px){
+  header{padding:0 16px;height:auto;flex-direction:column;align-items:flex-start;gap:0;padding-top:10px;padding-bottom:10px;}
+  .logo h1{font-size:1rem;}
+  nav{width:100%;overflow-x:auto;padding-bottom:2px;}
+  nav button{padding:5px 12px;font-size:.78rem;white-space:nowrap;}
+  main{padding:16px 14px 48px;}
+  .stats-row{grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px;}
+  .stats-row .stat:last-child{grid-column:1/-1;}
+  .stat .val{font-size:1.35rem;}
+  .charts-row{grid-template-columns:1fr;gap:12px;margin-bottom:12px;}
+  .chart-wrap{height:180px;}
+  .radar-card{flex-direction:column;gap:16px;padding:14px;}
+  .radar-canvas-wrap{width:100%;height:auto;display:flex;justify-content:center;}
+  .radar-canvas-wrap canvas{width:260px!important;height:260px!important;}
+  .radar-legend{width:100%;}
+  .radar-dim{font-size:.75rem;}
+  .books-grid{grid-template-columns:repeat(2,1fr);gap:10px;}
+  .book-title-sm{font-size:.72rem;}
+  .book-cover img{opacity:1;}
+  .filters{gap:7px;}
+  .search-wrap{min-width:100%;flex:none;}
+  select{width:48%;flex:1;}
+  .modal{padding:18px 14px;max-height:95vh;border-radius:10px;}
+  .modal-top{flex-direction:column;gap:12px;}
+  .modal-cover{width:100%;height:160px;min-width:unset;}
+  .modal-cover img,.modal-cover-ph{object-fit:contain;}
+  .recs-grid{grid-template-columns:1fr;}
+  .sec-hdr h2{font-size:1.35rem;}
+}
 </style>
 </head>
 <body>
@@ -262,11 +293,24 @@ function hesc(s){
 /* ---- BAR CHART (pure canvas) ---- */
 var chartMode = 0;
 var barChartCanvas = null;
+/* bar chart state */
+var barRects = []; // [{x,y,w,h,label,val}] for hit-testing
+var barTooltipEl = null;
+
+function getOrCreateBarTooltip() {
+  if (!barTooltipEl) {
+    barTooltipEl = document.createElement('div');
+    barTooltipEl.style.cssText = 'position:fixed;background:rgba(20,30,46,.92);color:#fff;padding:5px 10px;border-radius:6px;font-size:.78rem;pointer-events:none;opacity:0;transition:opacity .15s;z-index:500;font-family:Georgia,serif;white-space:nowrap;';
+    document.body.appendChild(barTooltipEl);
+  }
+  return barTooltipEl;
+}
+
 function buildBarChart() {
   var canvas = document.getElementById('yearChart');
   if (!canvas) return;
   var w = canvas.parentElement.offsetWidth || 500;
-  var h = 220;
+  var h = 240;
   canvas.width = w;
   canvas.height = h;
   var ctx = canvas.getContext('2d');
@@ -274,14 +318,16 @@ function buildBarChart() {
   var labels = CHART.years;
   var data = chartMode === 0 ? CHART.booksPerYear : CHART.pagesPerMonth;
   var maxVal = Math.max.apply(null, data);
+  var unit = chartMode === 0 ? ' books' : ' pages/mo';
 
-  var padL=34, padR=8, padT=8, padB=30;
+  var padL=34, padR=8, padT=10, padB=46;
   var plotW = w - padL - padR;
   var plotH = h - padT - padB;
   var barSlot = plotW / labels.length;
-  var barW = Math.max(2, barSlot * 0.6);
+  var barW = Math.max(3, barSlot * 0.65);
 
   ctx.clearRect(0,0,w,h);
+  barRects = [];
 
   // Gridlines + Y labels
   for (var gi=0; gi<=4; gi++) {
@@ -295,7 +341,7 @@ function buildBarChart() {
 
   // Bars
   for (var i=0; i<data.length; i++) {
-    var bh = data[i] / maxVal * plotH;
+    var bh = Math.max(2, data[i] / maxVal * plotH);
     var bx = padL + i * barSlot + (barSlot - barW) / 2;
     var by = padT + plotH - bh;
     var r = Math.min(4, barW/2, bh/2);
@@ -310,13 +356,53 @@ function buildBarChart() {
     ctx.lineTo(bx, by+r); ctx.arcTo(bx, by, bx+r, by, r);
     ctx.closePath(); ctx.fill();
 
-    // X labels (show every 2nd or 3rd)
-    var step = labels.length > 12 ? 3 : 2;
-    if (i % step === 0) {
-      ctx.fillStyle = '#9a8c84'; ctx.font = '9px Georgia,serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(labels[i], bx + barW/2, h - padB + 14);
-    }
+    barRects.push({x:bx, y:by, w:barW, h:bh, label:labels[i], val:data[i], unit:unit});
+  }
+
+  // All year labels - rotated 45deg so they all fit
+  ctx.save();
+  ctx.fillStyle = '#9a8c84';
+  ctx.font = '9px Georgia,serif';
+  ctx.textAlign = 'right';
+  for (var i=0; i<labels.length; i++) {
+    var bx = padL + i * barSlot + barSlot/2;
+    ctx.save();
+    ctx.translate(bx, h - padB + 8);
+    ctx.rotate(-Math.PI/4);
+    ctx.fillText(labels[i], 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // Attach hover listener (once)
+  if (!canvas._hoverBound) {
+    canvas._hoverBound = true;
+    var tip = getOrCreateBarTooltip();
+    canvas.addEventListener('mousemove', function(e) {
+      var rect = canvas.getBoundingClientRect();
+      var scaleX = canvas.width / rect.width;
+      var scaleY = canvas.height / rect.height;
+      var mx = (e.clientX - rect.left) * scaleX;
+      var my = (e.clientY - rect.top) * scaleY;
+      var hit = null;
+      for (var i=0; i<barRects.length; i++) {
+        var b = barRects[i];
+        if (mx >= b.x && mx <= b.x+b.w && my >= b.y && my <= b.y+b.h) { hit=b; break; }
+      }
+      if (hit) {
+        tip.textContent = hit.label + ': ' + hit.val + hit.unit;
+        tip.style.left = (e.clientX + 12) + 'px';
+        tip.style.top  = (e.clientY - 28) + 'px';
+        tip.style.opacity = '1';
+        canvas.style.cursor = 'crosshair';
+      } else {
+        tip.style.opacity = '0';
+        canvas.style.cursor = '';
+      }
+    });
+    canvas.addEventListener('mouseleave', function() {
+      tip.style.opacity = '0';
+    });
   }
 }
 
@@ -513,24 +599,28 @@ function processCoverQueue() {
   }
 }
 
+function olFetch(query, cb) {
+  var url = 'https://openlibrary.org/search.json?q=' + encodeURIComponent(query) + '&fields=cover_i&limit=1';
+  var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var tid = ctrl ? setTimeout(function(){ ctrl.abort(); }, 8000) : null;
+  var opts = ctrl ? {signal: ctrl.signal} : {};
+  return fetch(url, opts).then(function(r){ if(tid) clearTimeout(tid); return r.json(); })
+    .then(function(d){ return d && d.docs && d.docs[0] && d.docs[0].cover_i || null; })
+    .catch(function(){ return null; });
+}
+
 function fetchCoverUrl(title, author, cb) {
   var key = title + '|' + author;
   if (key in coverCache) { cb(coverCache[key]); return; }
-  var url = 'https://openlibrary.org/search.json?q=' + encodeURIComponent(title + ' ' + author) + '&fields=cover_i&limit=1';
-  try {
-    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var tid = ctrl ? setTimeout(function(){ ctrl.abort(); }, 8000) : null;
-    var opts = ctrl ? {signal: ctrl.signal} : {};
-    fetch(url, opts).then(function(r){
-      if(tid) clearTimeout(tid);
-      return r.json();
-    }).then(function(d){
-      var id = d && d.docs && d.docs[0] && d.docs[0].cover_i;
-      var imgUrl = id ? 'https://covers.openlibrary.org/b/id/' + id + '-M.jpg' : null;
-      coverCache[key] = imgUrl;
-      cb(imgUrl);
-    }).catch(function(){ coverCache[key] = null; cb(null); });
-  } catch(e) { coverCache[key] = null; cb(null); }
+  // Try title+author first, fall back to title-only if no cover found
+  olFetch(title + ' ' + author).then(function(id) {
+    if (id) return id;
+    return olFetch(title); // title-only fallback
+  }).then(function(id) {
+    var imgUrl = id ? 'https://covers.openlibrary.org/b/id/' + id + '-M.jpg' : null;
+    coverCache[key] = imgUrl;
+    cb(imgUrl);
+  }).catch(function(){ coverCache[key] = null; cb(null); });
 }
 
 function updateLoadingBar() {
