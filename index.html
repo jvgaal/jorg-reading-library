@@ -162,6 +162,7 @@ select{padding:8px 12px;border:1px solid var(--border2);border-radius:8px;backgr
   .sec-hdr h2{font-size:1.35rem;}
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <header>
@@ -596,7 +597,7 @@ function loadCoverIntoImg(it) {
 
   if (it.localCover) {
     /* Use uploaded local cover */
-    var localUrl = 'covers/' + it.localCover.split('').map(function(c){
+    var localUrl = 'https://jvgaal.github.io/jorg-reading-library/covers/' + it.localCover.split('').map(function(c){
       return /[A-Za-z0-9\-_.~]/.test(c) ? c : encodeURIComponent(c);
     }).join('');
     applyUrl(localUrl);
@@ -803,37 +804,39 @@ function buildRecs() {
 
 /* ---- EXPORT ---- */
 function exportBooks() {
-  var headers = ['Title','Author','Year','Pages','Rating','Genre','ISBN13','Goodreads','About','Review'];
-  var rows = [headers];
-  for (var i=0; i<BOOKS.length; i++) {
-    var b = BOOKS[i];
-    var gdUrl = 'https://www.goodreads.com/search?q=' + encodeURIComponent(b.title + ' ' + b.author);
-    rows.push([
-      b.title   || '',
-      b.author  || '',
-      b.year    || '',
-      b.pages   || '',
-      b.rating  || '',
-      b.genre   || '',
-      b.isbn13  || '',
-      gdUrl,
-      b.about   || '',
-      b.review  || ''
-    ]);
+  var data = BOOKS.map(function(b) {
+    var gdUrl = b.isbn13
+      ? 'https://www.goodreads.com/book/isbn/' + b.isbn13
+      : 'https://www.goodreads.com/search?q=' + encodeURIComponent(b.title + ' ' + b.author);
+    return {
+      'Title':      b.title   || '',
+      'Author':     b.author  || '',
+      'Year Read':  b.year    || '',
+      'Pages':      b.pages   || '',
+      'Rating (★)': b.rating  || '',
+      'Genre':      b.genre   || '',
+      'ISBN13':     b.isbn13  || '',
+      'Goodreads':  gdUrl,
+      'About':      b.about   || '',
+      'My Review':  b.review  || ''
+    };
+  });
+  var ws = XLSX.utils.json_to_sheet(data);
+  /* Column widths */
+  ws['!cols'] = [
+    {wch:45},{wch:25},{wch:10},{wch:8},{wch:10},{wch:22},
+    {wch:15},{wch:55},{wch:60},{wch:80}
+  ];
+  /* Style header row bold */
+  var range = XLSX.utils.decode_range(ws['!ref']);
+  for (var C = range.s.c; C <= range.e.c; C++) {
+    var cellAddr = XLSX.utils.encode_cell({r:0, c:C});
+    if (!ws[cellAddr]) continue;
+    ws[cellAddr].s = {font:{bold:true}, fill:{fgColor:{rgb:'141E2E'}}, alignment:{horizontal:'center'}};
   }
-  var csv = rows.map(function(r){
-    return r.map(function(v){
-      var s = String(v).replace(/"/g,'""');
-      return /[,"\n\r]/.test(s) ? '"'+s+'"' : s;
-    }).join(',');
-  }).join('\r\n');
-  var blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8;'});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = 'jorg-reading-library.csv';
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'My Library');
+  XLSX.writeFile(wb, 'jorg-reading-library.xlsx');
 }
 
 /* ---- NAV ---- */
