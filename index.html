@@ -596,7 +596,7 @@ function loadCoverIntoImg(it) {
 
   if (it.localCover) {
     /* Use uploaded local cover */
-    var localUrl = '/covers/' + it.localCover.split('').map(function(c){
+    var localUrl = 'covers/' + it.localCover.split('').map(function(c){
       return /[A-Za-z0-9\-_.~]/.test(c) ? c : encodeURIComponent(c);
     }).join('');
     applyUrl(localUrl);
