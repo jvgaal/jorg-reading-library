@@ -29,7 +29,7 @@ Claude fills in the rest and pushes it live. That's it. No HTML, no images, no E
    and the **ISBN-13** (13 digits, starts `978…`). The ISBN is what makes the cover
    appear, so always get it.
 2. **Pick a genre** from the fixed list below (use the closest fit — don't invent new
-   ones, or the genre chart gains a one-off slice).
+   ones, or the genre chart gains a one-off bar).
 3. **Write a short, neutral `about`** (2–4 sentences describing the book — not an
    opinion). Jorg's opinion goes in `review`.
 4. **Use Jorg's rating and review** verbatim. Keep his wording; line breaks become `\n`.
