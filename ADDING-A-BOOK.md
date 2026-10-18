@@ -36,9 +36,11 @@ Claude fills in the rest and pushes it live. That's it. No HTML, no images, no E
 5. **Insert the entry at the FRONT of the `BOOKS` list** (newest first), right after
    `var BOOKS = [`. Set `finishedDate` to the date Jorg finished it (default: today).
 6. **Commit and push** to `main`. GitHub Pages redeploys in ~1 minute.
-7. Confirm the cover shows. If Open Library has no cover for that ISBN (rare), download
-   a cover image, save it as `covers/<isbn13>.jpg`, and add `"localCover": "<isbn13>.jpg"`
-   to the entry as a fallback.
+7. **Always save a local cover** (Open Library is too slow to rely on — 5–10 s per
+   image). Download the cover (Open Library or the Goodreads page), convert it to a
+   **real JPEG, 300 px wide**, save it as `covers/<isbn13>.jpg`, and add
+   `"localCover": "<isbn13>.jpg"` to the entry. Every book in the library has one.
+   On a Mac: `sips -s format jpeg -s formatOptions 74 --resampleWidth 300 in.jpg --out covers/<isbn13>.jpg`
 
 ---
 
@@ -98,20 +100,21 @@ Use one of these exactly (counts are illustrative):
 
 ---
 
-## How covers work (why no image upload is needed)
+## How covers work
 
 Each card tries, in order:
-1. A local file `covers/<isbn13>.jpg` **if** `localCover` is set.
-2. Open Library: `https://covers.openlibrary.org/b/isbn/<isbn13>-L.jpg`.
+1. The local file `covers/<localCover>` — every book has one: a ~20 KB, 300 px wide JPEG.
+2. Open Library (`https://covers.openlibrary.org/b/isbn/<isbn13>-L.jpg`) only as a
+   fallback if the local file is missing.
+3. A coloured placeholder with the title.
 
-Because step 2 only needs the ISBN, **you almost never have to touch the `covers/`
-folder.** Just supply a correct `isbn13` and the cover appears. The `covers/` folder
-exists only for the rare book Open Library doesn't have.
+Keep covers small and in real JPEG format (not WebP/AVIF renamed to `.jpg`), so the
+library stays fast on phones. Wide or square covers are shown whole automatically.
 
 ---
 
 ## Quick sanity check after pushing
 
 - Open https://jvgaal.github.io/jorg-reading-library/ (wait ~1 min for redeploy).
-- New book appears first in **My Books**, with a cover.
+- New book appears as "Just finished" on the overview and first in the **Library**, with a cover.
 - The "Books Read" / "Pages Turned" / "Personal Reviews" stats each went up.
